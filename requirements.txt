@@ -1,0 +1,7 @@
+requests
+pandas
+pydantic
+sqlalchemy
+matplotlib
+seaborn
+jupyter
