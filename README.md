@@ -32,9 +32,9 @@ Open-Meteo APIs -> raw/*.json -> pandas tables -> Pydantic check -> SQLite -> ED
 | `eda.py` | Reads the DB back, makes charts/tables in `outputs/` and `findings.md` |
 | `eda_notebook.ipynb` | Same EDA, step by step |
 | `export_web_data.py` | Summarizes the DB into `web/data.js` for the website |
+| `make_report.py` | Builds report.docx from the results (python make_report.py) |
 | `web/` | The website: `index.html`, `style.css`, `app.js`, `data.js` (plain HTML/CSS/JS) |
-| `tests/make_sample_data.py` | FAKE data for testing only. Never use it in your report |
-| `VIVA_NOTES.md` | Questions and answers for the viva |
+| `tests/make_sample_data.py` | FAKE data for testing only |
 
 ## Outputs
 
@@ -42,30 +42,6 @@ Open-Meteo APIs -> raw/*.json -> pandas tables -> Pydantic check -> SQLite -> ED
 - `processed/`: `clean_air_weather.csv`, `rejected_rows.csv` (rows Pydantic refused, with the reason), `transform_report.json`
 - `outputs/`: 8 charts, `summary_stats.csv`, `missing_values.csv`, `daily_pm_vs_who.csv`, `findings.md`
 - `web/data.js`: the numbers the website draws
-
-## Publish: GitHub, then Vercel
-
-**1. GitHub.** Create an empty repository on github.com (Public, no README). Then, in the VS Code terminal inside the folder that contains `config.py`:
-
-```bash
-git init
-git add .
-git commit -m "ETL + EDA pipeline and dashboard"
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/YOUR-REPO.git
-git push -u origin main
-```
-
-(If git asks who you are: `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"`.)
-
-**2. Vercel.** Sign in at vercel.com with GitHub, click **Add New > Project**, import the repository, then:
-- click **Edit** next to **Root Directory** and choose `web`
-- Framework Preset: **Other**. Leave Build Command and Output Directory empty
-- click **Deploy**
-
-Vercel gives you a link like `https://your-project.vercel.app`. Paste the GitHub link and this link into the submission form.
-
-If you re-run the pipeline later, `git add .`, `git commit`, `git push` again and Vercel redeploys automatically.
 
 ## Automatic refresh
 
@@ -75,7 +51,7 @@ The date range is rolling: `END_DATE` is today minus 6 days (the weather archive
 
 This is a scheduled batch job, not real-time: the website shows data up to about 6 days ago and changes at most once a day. If any stage fails, nothing is committed and the site keeps the last good data. The failed run shows up in red on the Actions tab.
 
-## Design choices (be ready to explain these)
+## Design choices
 
 - **Why two APIs?** Air quality and weather are separate Open-Meteo services; they share timestamps, so they merge on `time`.
 - **Same timezone in both calls** (Asia/Karachi), otherwise the hours would not line up.
