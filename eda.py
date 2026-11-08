@@ -2,6 +2,11 @@
 
 Run `python eda.py` to produce every chart + table in outputs/.
 Each fig_* function also works on its own inside the notebook.
+
+What is covered (the same list as the project description):
+  summary statistics, missing-value check, pollutant distributions,
+  hourly / daily / monthly patterns, weather-vs-pollutant correlations,
+  days above the WHO guideline, and written findings.
 """
 import sqlite3
 import sys
@@ -10,9 +15,10 @@ import matplotlib
 
 if "ipykernel" not in sys.modules:      # plain script -> draw to files only
     matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
+import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 
 import config
@@ -20,22 +26,25 @@ import config
 # ---- look: one accent colour, quiet grid, no clutter ---------------------
 INK, MUTED, GRID = "#1f2937", "#6b7280", "#e5e7eb"
 ACCENT, WARN = "#2563eb", "#c2410c"
+LIGHT = "#93b4f5"
 DIVERGING = LinearSegmentedColormap.from_list(
     "div", ["#2563eb", "#f3f4f6", "#c2410c"])   # blue - neutral - orange
 
-plt.rcParams.update({
+sns.set_theme(style="whitegrid", rc={
     "figure.figsize": (8, 4.5), "font.size": 10, "text.color": INK,
     "axes.edgecolor": MUTED, "axes.labelcolor": INK, "axes.titlesize": 12,
     "axes.titleweight": "bold", "axes.titlelocation": "left",
     "axes.spines.top": False, "axes.spines.right": False,
-    "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.8,
-    "axes.axisbelow": True, "xtick.color": MUTED, "ytick.color": MUTED,
+    "grid.color": GRID, "grid.linewidth": 0.8, "axes.axisbelow": True,
+    "xtick.color": MUTED, "ytick.color": MUTED,
 })
 
 UG = "µg/m³"
-LABELS = {"pm2_5": "PM2.5", "pm10": "PM10", "temperature_2m": "Temperature",
-          "relative_humidity_2m": "Humidity", "wind_speed_10m": "Wind speed",
-          "surface_pressure": "Pressure", "precipitation": "Rain"}
+LABELS = {"pm2_5": "PM2.5", "pm10": "PM10", "nitrogen_dioxide": "NO2",
+          "ozone": "O3", "carbon_monoxide": "CO", "sulphur_dioxide": "SO2",
+          "temperature_2m": "Temperature", "relative_humidity_2m": "Humidity",
+          "wind_speed_10m": "Wind speed", "surface_pressure": "Pressure",
+          "precipitation": "Rain"}
 
 
 def _finish(fig, name):
@@ -45,6 +54,15 @@ def _finish(fig, name):
     if "ipykernel" not in sys.modules:
         plt.close(fig)
     return fig
+
+
+def _month_ticks(ax, months, rotate=45):
+    """Label a categorical x axis with 'Nov 25' style month names."""
+    ax.set_xticks(range(len(months)))
+    ax.set_xticklabels([pd.Period(m).strftime("%b %y") for m in months],
+                       rotation=rotate, ha="right" if rotate else "center")
+    ax.set_xlabel("")
+    ax.grid(axis="x", visible=False)
 
 
 # ---- data -----------------------------------------------------------------
@@ -88,10 +106,12 @@ def save_tables(df, daily):
     return stats, miss
 
 
-# ---- figures --------------------------------------------------------------
+# ---- figures (seaborn on top of matplotlib) ---------------------------------
 def fig_distribution(df):
+    """01 - how are hourly PM2.5 values spread?"""
     fig, ax = plt.subplots()
-    ax.hist(df["pm2_5"], bins=50, color=ACCENT, edgecolor="white", linewidth=0.5)
+    sns.histplot(df["pm2_5"], bins=50, color=ACCENT, edgecolor="white",
+                 linewidth=0.5, ax=ax)
     ax.axvline(config.WHO_PM25_DAILY, color=WARN, ls="--", lw=1.5)
     ax.text(config.WHO_PM25_DAILY, 0.96, f"  WHO 24-h guideline: {config.WHO_PM25_DAILY}",
             transform=ax.get_xaxis_transform(), color=WARN, va="top")
@@ -100,82 +120,112 @@ def fig_distribution(df):
     return _finish(fig, "01_pm25_distribution.png")
 
 
+def fig_pollutants(df):
+    """02 - the distribution of every pollutant (x axis cut at the 99.5th percentile)."""
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6.5))
+    for i, (ax, col) in enumerate(zip(axes.ravel(), config.AIR_VARS)):
+        s = df[col].dropna()
+        s = s[s <= s.quantile(0.995)]
+        sns.histplot(s, bins=40, kde=s.nunique() > 5, color=ACCENT,
+                     edgecolor="white", linewidth=0.4, ax=ax)
+        ax.set(title=LABELS[col], xlabel=UG, ylabel="Hours" if i % 3 == 0 else "")
+    fig.suptitle("Distribution of each pollutant (hourly values)", x=0.01,
+                 ha="left", fontweight="bold")
+    return _finish(fig, "02_pollutant_distributions.png")
+
+
 def fig_hourly(df):
-    h = df.groupby("hour")["pm2_5"].mean()
+    """03 - hour-of-day pattern: line = mean, band = 95% confidence interval."""
     fig, ax = plt.subplots()
-    ax.plot(h.index, h.values, color=ACCENT, lw=2, marker="o", ms=4,
-            markeredgecolor="white")
-    ax.set(title="Average PM2.5 by hour of day", xlabel="Hour of day (Pakistan time)",
-           ylabel=f"Mean PM2.5 ({UG})", xticks=range(0, 24, 3))
-    return _finish(fig, "02_pm25_by_hour.png")
+    sns.lineplot(data=df, x="hour", y="pm2_5", estimator="mean",
+                 errorbar=("ci", 95), n_boot=200, seed=0, color=ACCENT,
+                 linewidth=2, marker="o", markeredgecolor="white", ax=ax)
+    ax.set(title="Average PM2.5 by hour of day (band = 95% confidence interval)",
+           xlabel="Hour of day (Pakistan time)", ylabel=f"Mean PM2.5 ({UG})",
+           xticks=range(0, 24, 3))
+    return _finish(fig, "03_pm25_by_hour.png")
 
 
-def fig_monthly(df):
-    m = df.groupby("month")["pm2_5"].mean()
-    fig, ax = plt.subplots()
-    bars = ax.bar(m.index, m.values, color=ACCENT, width=0.7)
+def fig_daily(daily):
+    """04 - daily mean PM2.5 through the whole period, with the WHO limit."""
+    d = daily.copy()
+    d["date"] = pd.to_datetime(d["date"])
+    d = d.sort_values("date")
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    sns.lineplot(data=d, x="date", y="pm2_5_mean", color=ACCENT, linewidth=1.2,
+                 label="Daily mean", ax=ax)
+    roll = d.set_index("date")["pm2_5_mean"].rolling(7, center=True, min_periods=4).mean()
+    ax.plot(roll.index, roll.values, color=INK, lw=2.2, label="7-day average")
     ax.axhline(config.WHO_PM25_DAILY, color=WARN, ls="--", lw=1.5,
                label=f"WHO 24-h guideline ({config.WHO_PM25_DAILY})")
     ax.legend(loc="upper right", frameon=False)
-    for b, v in zip(bars, m.values):
-        ax.text(b.get_x() + b.get_width() / 2, v, f"{v:.0f}", ha="center",
-                va="bottom", color=MUTED, fontsize=8)
-    ax.set(title="Average PM2.5 by month", ylabel=f"Mean PM2.5 ({UG})")
-    ax.tick_params(axis="x", rotation=45)
-    ax.grid(axis="x", visible=False)
-    return _finish(fig, "03_pm25_by_month.png")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %y"))
+    ax.set(title="Daily average PM2.5", xlabel="", ylabel=f"PM2.5 ({UG})")
+    return _finish(fig, "04_pm25_daily.png")
+
+
+def fig_monthly(df):
+    """05 - monthly distribution: box = middle 50% of hours, line = median."""
+    months = sorted(df["month"].unique())
+    fig, ax = plt.subplots()
+    sns.boxplot(data=df, x="month", y="pm2_5", order=months, color=LIGHT,
+                linecolor=INK, linewidth=1, showfliers=False, ax=ax)
+    ax.axhline(config.WHO_PM25_DAILY, color=WARN, ls="--", lw=1.5,
+               label=f"WHO 24-h guideline ({config.WHO_PM25_DAILY})")
+    ax.legend(loc="upper right", frameon=False)
+    ax.set(title="PM2.5 by month (outliers hidden)", ylabel=f"PM2.5 ({UG})")
+    _month_ticks(ax, months)
+    return _finish(fig, "05_pm25_monthly_boxplot.png")
 
 
 def fig_corr(df):
-    cols = ["pm2_5", "pm10", "temperature_2m", "relative_humidity_2m",
-            "wind_speed_10m", "surface_pressure", "precipitation"]
-    c = df[cols].corr()
-    fig, ax = plt.subplots(figsize=(7, 6))
-    im = ax.imshow(c.values, cmap=DIVERGING, vmin=-1, vmax=1)
-    names = [LABELS[x] for x in cols]
-    ax.set_xticks(range(len(cols)), names, rotation=45, ha="right")
-    ax.set_yticks(range(len(cols)), names)
+    """06 - correlation of every pollutant with every weather variable."""
+    rows, cols = config.AIR_VARS, config.WEATHER_VARS
+    c = df[rows + cols].corr().loc[rows, cols]
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    sns.heatmap(c, annot=True, fmt=".2f", cmap=DIVERGING, vmin=-1, vmax=1,
+                center=0, linewidths=2, linecolor="white", ax=ax,
+                cbar_kws={"label": "Correlation (-1 to +1)", "shrink": 0.85})
+    ax.set_xticklabels([LABELS[x] for x in cols], rotation=30, ha="right")
+    ax.set_yticklabels([LABELS[x] for x in rows], rotation=0)
+    ax.set(title="Correlation: pollutants vs weather", xlabel="", ylabel="")
     ax.grid(False)
-    for i in range(len(cols)):
-        for j in range(len(cols)):
-            v = c.values[i, j]
-            ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=9,
-                    color="white" if abs(v) > 0.6 else INK)
-    fig.colorbar(im, ax=ax, shrink=0.8, label="Correlation (-1 to +1)")
-    ax.set_title("Correlation between pollution and weather")
-    return _finish(fig, "04_correlation_heatmap.png")
+    return _finish(fig, "06_correlation_heatmap.png")
 
 
 def fig_scatter(df):
-    pairs = [("wind_speed_10m", "Wind speed (km/h)"),
+    """07 - PM2.5 against each weather variable (dark line = median per slice)."""
+    pairs = [("temperature_2m", "Temperature (°C)"),
              ("relative_humidity_2m", "Humidity (%)"),
-             ("temperature_2m", "Temperature (°C)")]
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharey=True)
-    for ax, (col, label) in zip(axes, pairs):
-        ax.scatter(df[col], df["pm2_5"], s=5, alpha=0.12, color=ACCENT, linewidths=0)
+             ("wind_speed_10m", "Wind speed (km/h)"),
+             ("surface_pressure", "Pressure (hPa)")]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7.5), sharey=True)
+    for ax, (col, label) in zip(axes.ravel(), pairs):
+        sns.scatterplot(data=df, x=col, y="pm2_5", s=8, alpha=0.15,
+                        color=ACCENT, linewidth=0, ax=ax)
         bins = pd.cut(df[col], 15)
         med = df.groupby(bins, observed=True).agg(x=(col, "mean"), y=("pm2_5", "median"))
-        ax.plot(med["x"], med["y"], color=INK, lw=2)
-        ax.set_xlabel(label)
-    axes[0].set_ylabel(f"PM2.5 ({UG})")
-    fig.suptitle("PM2.5 vs weather (dark line = median per bin)",
+        ax.plot(med["x"], med["y"], color=INK, lw=2.2)
+        ax.set(xlabel=label, ylabel=f"PM2.5 ({UG})")
+    fig.suptitle("PM2.5 vs weather (dark line = median per slice)",
                  x=0.01, ha="left", fontweight="bold")
-    return _finish(fig, "05_pm25_vs_weather.png")
+    return _finish(fig, "07_pm25_vs_weather.png")
 
 
 def fig_who(daily):
-    g = daily.groupby("month").agg(over=("over_who_pm25", "sum"),
-                                   days=("over_who_pm25", "size"))
+    """08 - how many days per month went above the WHO PM2.5 guideline."""
+    g = (daily.groupby("month")
+              .agg(over=("over_who_pm25", "sum"), days=("over_who_pm25", "size"))
+              .reset_index())
     fig, ax = plt.subplots()
-    bars = ax.bar(g.index, g["over"], color=ACCENT, width=0.7)
-    for b, (o, d) in zip(bars, zip(g["over"], g["days"])):
-        ax.text(b.get_x() + b.get_width() / 2, o, f"{o}/{d}", ha="center",
-                va="bottom", color=MUTED, fontsize=8)
+    sns.barplot(data=g, x="month", y="over", color=ACCENT, errorbar=None, ax=ax)
+    for i, row in enumerate(g.itertuples()):
+        ax.text(i, row.over, f"{row.over}/{row.days}", ha="center", va="bottom",
+                color=MUTED, fontsize=8)
     ax.set(title=f"Days above the WHO PM2.5 guideline ({config.WHO_PM25_DAILY} {UG})",
            ylabel="Days (label = days over / days measured)")
-    ax.tick_params(axis="x", rotation=45)
-    ax.grid(axis="x", visible=False)
-    return _finish(fig, "06_days_over_who.png")
+    _month_ticks(ax, list(g["month"]))
+    return _finish(fig, "08_days_over_who.png")
 
 
 # ---- written findings (numbers computed from the data) ---------------------
@@ -210,6 +260,18 @@ def write_findings(df, daily):
     lines.append("- Correlation of PM2.5 with weather: " + ", ".join(
         f"{LABELS[k]} {v:+.2f}" for k, v in corr.items()) +
         f". Strongest: {LABELS[strongest]}.")
+
+    # strongest weather link for every pollutant (not only PM2.5)
+    cm = df[config.AIR_VARS + config.WEATHER_VARS].corr().loc[config.AIR_VARS, config.WEATHER_VARS]
+    parts = []
+    for p in config.AIR_VARS:
+        row = cm.loc[p].dropna()
+        if not row.empty:
+            w = row.abs().idxmax()
+            parts.append(f"{LABELS[p]}: {LABELS[w]} ({row[w]:+.2f})")
+    if parts:
+        lines.append("- Strongest weather correlation per pollutant: " + "; ".join(parts) + ".")
+
     rain = df["precipitation"] > 0
     if rain.any() and (~rain).any():
         lines.append(f"- Mean PM2.5 in hours with rain: {pm[rain].mean():.1f} vs "
@@ -226,9 +288,14 @@ def main():
     if df.empty:
         raise ValueError("The database table is empty - nothing to analyse")
     daily = daily_table(df)
+    config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # remove charts from older versions so outputs/ never holds stale pictures
+    for old in config.OUTPUT_DIR.glob("[0-9][0-9]_*.png"):
+        old.unlink()
     save_tables(df, daily)
-    for fn, arg in [(fig_distribution, df), (fig_hourly, df), (fig_monthly, df),
-                    (fig_corr, df), (fig_scatter, df), (fig_who, daily)]:
+    for fn, arg in [(fig_distribution, df), (fig_pollutants, df), (fig_hourly, df),
+                    (fig_daily, daily), (fig_monthly, df), (fig_corr, df),
+                    (fig_scatter, df), (fig_who, daily)]:
         fn(arg)
     print(write_findings(df, daily))
     print(f"\nCharts and tables saved in {config.OUTPUT_DIR}")

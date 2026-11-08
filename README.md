@@ -40,7 +40,7 @@ Open-Meteo APIs -> raw/*.json -> pandas tables -> Pydantic check -> SQLite -> ED
 
 - `raw/`: untouched API responses
 - `processed/`: `clean_air_weather.csv`, `rejected_rows.csv` (rows Pydantic refused, with the reason), `transform_report.json`
-- `outputs/`: 6 charts, `summary_stats.csv`, `missing_values.csv`, `daily_pm_vs_who.csv`, `findings.md`
+- `outputs/`: 8 charts, `summary_stats.csv`, `missing_values.csv`, `daily_pm_vs_who.csv`, `findings.md`
 - `web/data.js`: the numbers the website draws
 
 ## Publish: GitHub, then Vercel
